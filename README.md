@@ -1,8 +1,13 @@
+
+![canvas](https://github.com/user-attachments/assets/dd74d092-0f3e-4416-a6ec-09f9cbfc6504)
+
 # TaskCanvas
 
 A visual dependency **canvas** and command generator for Taskwarrior.
 
-TaskCanvas loads your pending Taskwarrior tasks, builds a dependency graph, and opens a single HTML file where you can drag tasks around, wire dependencies, and stage changes. Every action becomes plain task commands that you copy-paste back into your terminal  -  the HTML never touches your Taskwarrior data directly.
+TaskCanvas loads your pending Taskwarrior tasks, builds a dependency graph, and opens a single HTML file where you can drag tasks around, wire dependencies, and stage changes. 
+
+Every action becomes plain task commands that you copy-paste back into your terminal  -  the HTML never touches your Taskwarrior data directly.
 
 ---
 
@@ -31,6 +36,21 @@ Inside the browser you get an interactive canvas where you can:
 - Copy all staged changes as Taskwarrior commands.
 
 ---
+## 30-second start
+
+```bash
+# 1. clone or download TaskCanvas.py anywhere
+curl -LO https://raw.githubusercontent.com/catanadj/taskwarrior-canvas/main/TaskCanvas.py
+chmod +x TaskCanvas.py
+
+# 2. generate the board
+./TaskCanvas.py                    # all pending tasks
+./TaskCanvas.py project:Work       # only Work
+./TaskCanvas.py --filter "due.before:today"  # any filter string
+
+# 3. your browser opens; drag, connect, edit
+# 4. hit “Copy commands” and paste in terminal
+```
 
 ## Features
 
@@ -118,35 +138,6 @@ Termux & desktop friendly
 
 ---
 
-## Installation
-
-Clone this repository somewhere convenient and make sure TaskCanvas.py is executable.
-
-chmod +x TaskCanvas.py # or simply call it with python3
-
-Optionally, add a small helper in your shell config:
-
-alias twcanvas='python3 /path/to/TaskCanvas.py'
-
----
-
-## Usage
-
-### Basic
-
-Generate and open a canvas of all **pending** tasks:
-```
-python3 TaskCanvas.py
-```
-
-This will:
-
-1. Run a Taskwarrior export for status:pending.
-
-2. Create TaskCanvas.html in the current directory.
-
-3. Open that file in your browser.
-
 ### Auto-placing tasks by project
 
 You can pass project names as positional arguments; tasks from those projects will be initially placed on the canvas:
@@ -206,75 +197,6 @@ python3 TaskCanvas.py --bg /path/to/image.jpg python3 TaskCanvas.py --bg=mywall.
 TaskCanvas will copy the image next to TaskCanvas.html (same directory) and inject a body::before overlay with the given opacity (default ≈ 0.18).
 
 Without --bg, it tries to locate a file named like taskcanvas-bg.*, canvas-bg.*, background.* or bg.* in either the script directory or current working directory.
-
----
-
-## UI overview
-
-### Builder tab
-
-- **Left drawer**
-    Search/filter tasks, drag them into the canvas by dropping onto project/tag areas or directly into space.
-
-- **Canvas**
-
-    - Drag tasks, projects, and tags around freely.
-
-    - Draw dependencies by starting from a handle on one task and dragging to another.
-
-    - Use “remove mode” to easily click edges and remove/stage dependency removals.
-
-    - Animated pulses and coloured lines distinguish existing vs staged dependency relationships.
-
-- **Hover actions**
-
-    - Hover over a task to reveal a small action bar: Done / Delete / Modify etc.
-
-    - Toggling these stages corresponding commands and visually marks the task.
-
-- **FAB (floating button)**
-
-    - Add new tasks (single or multiline).
-
-    - Add new projects via a modal, wired in through a small patch that repurposes/extends the FAB menu.
-
-- **Console(s)**
-
-    - Primary console at the bottom collects all staged commands.
-
-    - A dependency-focused overlay console can be toggled via Ctrl+Shift+D.
-
-### Viewer tab (not fully baked functionality)
-
-- Read-only view of dependency chains:
-
-    - Tasks grouped by project.
-
-    - Only tasks that participate in dependencies are shown.
-
-    - Helps you reason about chains without the clutter of the full canvas.
-
----
-
-## Workflow: from canvas back to Taskwarrior
-
-1. Run TaskCanvas.py to generate/open the HTML.
-
-2. Use the Builder tab to:
-
-    - Drop tasks into the right project/tag buckets.
-
-    - Draw or remove dependency edges.
-
-    - Mark tasks done / deleted.
-
-    - Add any new tasks you want to create.
-
-3. Inspect the command console and copy the lines into your terminal.
-
-4. Run those task commands in your usual environment.
-
-TaskCanvas is deliberately **copy-only**: it never executes task mutations on your behalf; it only exports plus generates suggestions.
 
 ---
 
