@@ -45,7 +45,7 @@ chmod +x TaskCanvas.py
 
 # 2. generate the board
 ./TaskCanvas.py                    # all pending tasks
-./TaskCanvas.py project:Work       # only Work
+./TaskCanvas.py --selector      # select the project that you want to have open on the canvas.
 ./TaskCanvas.py --filter "due.before:today"  # any filter string
 
 # 3. your browser opens; drag, connect, edit
