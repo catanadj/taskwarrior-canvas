@@ -45,6 +45,17 @@
     '#5b8def', '#2fbf71', '#f2b84b', '#ec7a72', '#9b7df2',
     '#42c5c7', '#f18ab2', '#93c85a', '#f08b3e', '#4d8bff'
   ];
+  var DECISION_TEMPLATE = 'Decision:\nTarget outcome:\nSuccess means:\nDecision needed by:\nReassess by:';
+  var FACTOR_TEMPLATE = 'Factor / state:\nWhy it matters:\nSignal to watch:';
+  var OPTION_TEMPLATE = 'Option:\nWhy it may work:';
+  var OUTCOME_TEMPLATE = 'Possible outcome:\nBest estimate:\nReasonable range:\nPayoff / cost:\nKey assumptions:';
+  var FAILURE_MODE_TEMPLATE = 'Failure mode:\nHow could this happen?\nEarly warning:\nWithin my control:';
+  var SAFEGUARD_TEMPLATE = 'Prevent:\nDetect early:\nRespond if it happens:';
+  var CONSEQUENCE_TEMPLATES = {
+    1:'1st-order consequence:\nTime horizon:\nLikelihood:\nPayoff / cost:\nValue affected:',
+    2:'2nd-order consequence:\nWhat follows from the prior consequence?\nTime horizon:\nLikelihood:\nPayoff / cost:\nValue affected:',
+    3:'3rd-order consequence:\nWhat follows from the prior consequence?\nTime horizon:\nLikelihood:\nPayoff / cost:\nValue affected:'
+  };
 
   function qs(s, root){ return (root || document).querySelector(s); }
   function qsa(s, root){ return Array.prototype.slice.call((root || document).querySelectorAll(s)); }
@@ -189,6 +200,224 @@
   }
   function childLinksFrom(id){
     return links.filter(function(l){ return l && l.type === 'child' && l.from === id && noteById(l.to); });
+  }
+  function descendantNoteIds(rootId){
+    var found = Object.create(null);
+    var stack = [rootId];
+    while (stack.length){
+      var id = stack.pop();
+      if (found[id] || !noteById(id)) continue;
+      found[id] = true;
+      childLinksFrom(id).forEach(function(link){ stack.push(link.to); });
+    }
+    return Object.keys(found);
+  }
+  function decisionRootFor(id){
+    var cursor = id;
+    var seen = Object.create(null);
+    while (cursor && !seen[cursor]){
+      seen[cursor] = true;
+      var note = noteById(cursor);
+      if (!note) return null;
+      if (noteKind(note) === 'decision') return note;
+      var parent = parentLinkFor(cursor);
+      cursor = parent && parent.from;
+    }
+    return null;
+  }
+  function decisionOptions(rootId){
+    return childLinksFrom(rootId).map(function(link){ return noteById(link.to); }).filter(function(note){ return note && noteKind(note) === 'option'; });
+  }
+  function templateValue(content, label){
+    content = String(content || '');
+    label = String(label || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var match = content.match(new RegExp('(?:^|\\n)[ \\t]*' + label + '[ \\t]*:[ \\t]*([^\\n]+)', 'i'));
+    return match ? String(match[1] || '').trim() : '';
+  }
+  function oneLine(content, fallback){
+    var text = String(content || '').replace(/\s+/g, ' ').trim();
+    return text || fallback || 'New note';
+  }
+  function noteAnalysis(note){
+    return NoteCore.normalizeAnalysis(note && note.analysis);
+  }
+  function directInversionForOwner(ownerId){
+    var found = childLinksFrom(ownerId).map(function(link){ return noteById(link.to); }).filter(function(note){
+      var analysis = noteAnalysis(note);
+      return analysis && analysis.tool === 'inversion' && analysis.role === 'root' && analysis.ownerId === ownerId;
+    });
+    return found[0] || null;
+  }
+  function inversionRootFor(id){
+    var cursor = id;
+    var seen = Object.create(null);
+    while (cursor && !seen[cursor]){
+      seen[cursor] = true;
+      var note = noteById(cursor);
+      if (!note) return null;
+      var analysis = noteAnalysis(note);
+      if (analysis && analysis.tool === 'inversion' && analysis.role === 'root') return note;
+      var parent = parentLinkFor(cursor);
+      cursor = parent && parent.from;
+    }
+    return null;
+  }
+  function inversionFailures(rootId){
+    return childLinksFrom(rootId).map(function(link){ return noteById(link.to); }).filter(function(note){ return note && noteKind(note) === 'factor'; });
+  }
+  function isInversionFailure(id){
+    var root = inversionRootFor(id);
+    if (!root) return false;
+    return inversionFailures(root.id).some(function(note){ return note.id === id; });
+  }
+  function inversionContextFor(id){
+    var selected = noteById(id);
+    if (!selected) return null;
+    var selectedKind = noteKind(selected);
+    var canRun = selectedKind === 'decision' || selectedKind === 'option';
+    var root = canRun ? directInversionForOwner(selected.id) : inversionRootFor(selected.id);
+    if (!root){
+      return canRun ? {
+        ownerId:selected.id,
+        ownerLabel:oneLine(selected.content, NoteCore.kindLabel(selectedKind)),
+        rootId:'',
+        selectedId:selected.id,
+        selectedKind:selectedKind,
+        canRun:true,
+        failureCount:0,
+        missingSignals:0,
+        unprotected:0,
+        oppositeRecorded:false,
+        complete:false
+      } : null;
+    }
+    var analysis = noteAnalysis(root);
+    var owner = noteById(analysis && analysis.ownerId);
+    var failures = inversionFailures(root.id);
+    var missingSignals = failures.filter(function(note){ return !templateValue(note.content, 'Early warning'); }).length;
+    var unprotected = failures.filter(function(note){
+      return !childLinksFrom(note.id).some(function(link){ var child = noteById(link.to); return child && noteKind(child) === 'action'; });
+    }).length;
+    var oppositeRecorded = !!templateValue(root.content, 'Opposite outcome');
+    return {
+      ownerId:owner ? owner.id : (analysis && analysis.ownerId) || '',
+      ownerLabel:owner ? oneLine(owner.content, 'Decision subject') : 'Decision subject',
+      rootId:root.id,
+      selectedId:selected.id,
+      selectedKind:selectedKind,
+      canRun:canRun,
+      canAddFailure:selected.id === root.id,
+      canAddSafeguard:isInversionFailure(selected.id),
+      failureCount:failures.length,
+      missingSignals:missingSignals,
+      unprotected:unprotected,
+      oppositeRecorded:oppositeRecorded,
+      complete:oppositeRecorded && failures.length > 0 && missingSignals === 0 && unprotected === 0
+    };
+  }
+  function consequenceOrderLabel(order){
+    order = Number(order) || 0;
+    return order === 1 ? '1st order' : (order === 2 ? '2nd order' : (order === 3 ? '3rd order' : 'Consequence'));
+  }
+  function consequenceTemplate(order){
+    return CONSEQUENCE_TEMPLATES[Number(order) || 0] || OUTCOME_TEMPLATE;
+  }
+  function consequenceAnalysis(note){
+    var analysis = noteAnalysis(note);
+    var order = analysis && Number(analysis.order);
+    return analysis && analysis.tool === 'consequences' && analysis.role === 'consequence' && order >= 1 && order <= 3 ? analysis : null;
+  }
+  function consequenceNodesForOwner(ownerId){
+    return notes.filter(function(note){
+      var analysis = consequenceAnalysis(note);
+      return analysis && analysis.ownerId === ownerId;
+    });
+  }
+  function consequenceContextFor(id){
+    var selected = noteById(id);
+    if (!selected) return null;
+    var selectedAnalysis = consequenceAnalysis(selected);
+    var owner = noteKind(selected) === 'option' ? selected : (selectedAnalysis && noteById(selectedAnalysis.ownerId));
+    if (!owner || noteKind(owner) !== 'option') return null;
+    var consequenceNodes = consequenceNodesForOwner(owner.id);
+    var counts = {1:0, 2:0, 3:0};
+    consequenceNodes.forEach(function(note){ counts[Number(consequenceAnalysis(note).order)] += 1; });
+    var earlyStops = consequenceNodes.filter(function(note){
+      var analysis = consequenceAnalysis(note);
+      if (!analysis || Number(analysis.order) >= 3) return false;
+      return !childLinksFrom(note.id).some(function(link){
+        var childAnalysis = consequenceAnalysis(noteById(link.to));
+        return childAnalysis && childAnalysis.ownerId === owner.id && childAnalysis.runId === analysis.runId && Number(childAnalysis.order) === Number(analysis.order) + 1;
+      });
+    }).length;
+    var first = consequenceNodes[0] || null;
+    var firstAnalysis = consequenceAnalysis(first);
+    return {
+      ownerId:owner.id,
+      ownerLabel:oneLine(owner.content, 'Option'),
+      selectedId:selected.id,
+      selectedKind:noteKind(selected),
+      selectedOrder:selectedAnalysis ? Number(selectedAnalysis.order) : 0,
+      firstId:first ? first.id : '',
+      runId:(selectedAnalysis && selectedAnalysis.runId) || (firstAnalysis && firstAnalysis.runId) || '',
+      hasRun:consequenceNodes.length > 0,
+      canRun:noteKind(selected) === 'option',
+      canAddFirst:noteKind(selected) === 'option',
+      canAddParallel:!!selectedAnalysis,
+      canAddNext:!!selectedAnalysis && Number(selectedAnalysis.order) < 3,
+      counts:counts,
+      total:consequenceNodes.length,
+      earlyStops:earlyStops,
+      complete:counts[3] > 0 && earlyStops === 0
+    };
+  }
+  function decisionChecklist(root){
+    if (!root) return [];
+    var ids = descendantNoteIds(root.id);
+    var inBranch = Object.create(null);
+    ids.forEach(function(id){ inBranch[id] = true; });
+    var options = decisionOptions(root.id);
+    var factors = ids.map(noteById).filter(function(note){ return note && noteKind(note) === 'factor'; });
+    var evidence = ids.map(noteById).filter(function(note){ return note && noteKind(note) === 'evidence'; });
+    var outcomesComplete = !!options.length && options.every(function(option){
+      return childLinksFrom(option.id).some(function(link){ var note = noteById(link.to); return note && noteKind(note) === 'outcome'; });
+    });
+    var hasCondition = links.some(function(link){
+      var annotation = NoteCore.normalizeLinkAnnotation(link && link.annotation);
+      return link && inBranch[link.from] && inBranch[link.to] && annotation && annotation.kind === 'condition';
+    });
+    return [
+      {id:'target', label:'Target outcome recorded', complete:!!templateValue(root.content, 'Target outcome')},
+      {id:'success', label:'Success criteria recorded', complete:!!templateValue(root.content, 'Success means')},
+      {id:'options', label:'At least two genuine options', complete:options.length >= 2},
+      {id:'factors', label:'Important factors and personal constraints considered', complete:factors.length > 0},
+      {id:'outcomes', label:'Every option has a possible outcome', complete:outcomesComplete},
+      {id:'outside', label:'Outside-view evidence recorded', complete:evidence.length > 0},
+      {id:'trigger', label:'Reassessment date or conditional trigger recorded', complete:!!templateValue(root.content, 'Reassess by') || hasCondition}
+    ];
+  }
+  function decisionContextFor(id){
+    var selected = noteById(id);
+    var root = decisionRootFor(id);
+    if (!selected || !root) return null;
+    var record = NoteCore.normalizeDecisionRecord(root.decisionRecord) || {chosenOptionId:'', commits:[]};
+    var options = decisionOptions(root.id).map(function(option){
+      return {id:option.id, label:oneLine(option.content, 'Option'), chosen:record.chosenOptionId === option.id};
+    });
+    var last = record.commits.length ? record.commits[record.commits.length - 1] : null;
+    return {
+      rootId:root.id,
+      rootLabel:oneLine(root.content, 'Decision'),
+      selectedId:selected.id,
+      selectedKind:noteKind(selected),
+      canCommit:noteKind(selected) === 'option' && options.some(function(option){ return option.id === selected.id; }),
+      chosenOptionId:record.chosenOptionId,
+      chosenOptionLabel:(options.filter(function(option){ return option.chosen; })[0] || {}).label || '',
+      commitCount:record.commits.length,
+      lastCommittedAt:last ? last.committedAt : 0,
+      options:options,
+      checklist:decisionChecklist(root)
+    };
   }
   function focusedNoteIds(){
     var ids = Object.create(null);
@@ -1997,6 +2226,12 @@
     noteBtn.type = 'button';
     noteBtn.textContent = 'Note';
     noteBtn.title = 'Click the canvas to add a planning note';
+    var decisionBtn = document.createElement('button');
+    decisionBtn.id = 'noteDecisionBtn';
+    decisionBtn.className = 'btn ghost';
+    decisionBtn.type = 'button';
+    decisionBtn.textContent = 'Decision map';
+    decisionBtn.title = 'Create a guided decision map';
     var linkBtn = document.createElement('button');
     linkBtn.id = 'noteLinkModeBtn';
     linkBtn.className = 'btn ghost';
@@ -2063,6 +2298,7 @@
     saveStatus.setAttribute('data-state', 'saved');
     saveStatus.textContent = 'Saved';
     noteGroup.appendChild(noteBtn);
+    noteGroup.appendChild(decisionBtn);
     noteGroup.appendChild(linkBtn);
     noteGroup.appendChild(taskLinkBtn);
     noteGroup.appendChild(searchWrap);
@@ -2115,6 +2351,12 @@
       noteMode = !noteMode;
       if (noteMode){ linkMode = false; taskLinkMode = false; }
       syncButtons();
+    });
+    decisionBtn.addEventListener('click', function(){
+      var cv = canvas();
+      var rect = cv && cv.getBoundingClientRect ? cv.getBoundingClientRect() : null;
+      var point = rect ? screenToStage(rect.left + Math.max(180, rect.width * .32), rect.top + Math.max(180, rect.height * .38)) : {x:160, y:180};
+      createDecisionMap(point.x, point.y, 'Decisions');
     });
     linkBtn.addEventListener('click', function(){
       linkMode = !linkMode;
@@ -2204,6 +2446,7 @@
       bucket: bucketText(bucket),
       kind: opts && opts.kind,
       status: opts && opts.status,
+      analysis: opts && opts.analysis,
       collapsed: false,
       taskRefs: []
     });
@@ -2224,6 +2467,182 @@
     saveSoon();
     return n;
   }
+  function decisionTemplateForKind(kind){
+    if (kind === 'factor') return FACTOR_TEMPLATE;
+    if (kind === 'option') return OPTION_TEMPLATE;
+    if (kind === 'outcome') return OUTCOME_TEMPLATE;
+    return 'New branch';
+  }
+  function createDecisionMap(x, y, bucket){
+    x = Math.max(0, toInt(x, 160));
+    y = Math.max(0, toInt(y, 180));
+    bucket = bucketText(bucket || 'Decisions');
+    var root = createNote(x, y, DECISION_TEMPLATE, '', bucket, {kind:'decision', preservePosition:true});
+    var factor = createNote(x + 300, Math.max(0, y - 132), FACTOR_TEMPLATE, '', bucket, {kind:'factor', skipAutoLayout:true});
+    var optionA = createNote(x + 300, y, OPTION_TEMPLATE, '', bucket, {kind:'option', skipAutoLayout:true});
+    var optionB = createNote(x + 300, y + 132, OPTION_TEMPLATE, '', bucket, {kind:'option', skipAutoLayout:true});
+    addNoteLink(root.id, factor.id, 'child');
+    addNoteLink(root.id, optionA.id, 'child');
+    addNoteLink(root.id, optionB.id, 'child');
+    root.collapsed = false;
+    renderAll();
+    selectNote(root.id);
+    focusNoteText(root.id);
+    refreshViewerOutline();
+    saveSoon();
+    return {root:root, factor:factor, options:[optionA, optionB]};
+  }
+  function createDecisionChild(decisionId, kind){
+    var root = noteById(decisionId);
+    kind = NoteCore.normalizeKind(kind);
+    if (!root || noteKind(root) !== 'decision' || (kind !== 'option' && kind !== 'factor')) return null;
+    return createChildNote(root.id, decisionTemplateForKind(kind), '', null, kind);
+  }
+  function inversionTemplate(owner){
+    var ownerKind = noteKind(owner);
+    var decision = ownerKind === 'decision' ? owner : decisionRootFor(owner.id);
+    var target = decision ? templateValue(decision.content, 'Target outcome') : '';
+    var subjectLabel = ownerKind === 'option' ? 'Analysed option' : 'Analysed decision';
+    return 'INVERSION\nDesired outcome: ' + target + '\n' + subjectLabel + ': ' + oneLine(owner.content, NoteCore.kindLabel(ownerKind)) + '\nOpposite outcome:\nHow could I deliberately cause the opposite outcome?';
+  }
+  function runInversion(ownerId){
+    var owner = noteById(ownerId);
+    if (!owner || (noteKind(owner) !== 'decision' && noteKind(owner) !== 'option')) return null;
+    var existing = directInversionForOwner(owner.id);
+    if (existing){
+      focusNoteBranch(existing.id);
+      focusNoteText(existing.id);
+      noteFeedback('Focused the existing inversion analysis.');
+      return {root:existing, existing:true};
+    }
+    var runId = 'analysis-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    var existingChildren = childLinksFrom(owner.id).length;
+    var root = createNote(owner.x + 300, owner.y + existingChildren * 132, inversionTemplate(owner), '', noteBucket(owner), {
+      kind:'question',
+      skipAutoLayout:true,
+      analysis:{tool:'inversion', role:'root', ownerId:owner.id, runId:runId, createdAt:Date.now()}
+    });
+    addNoteLink(owner.id, root.id, 'child');
+    var failure = createNote(root.x + 300, root.y, FAILURE_MODE_TEMPLATE, '', noteBucket(owner), {kind:'factor', skipAutoLayout:true});
+    addNoteLink(root.id, failure.id, 'child');
+    renderAll();
+    focusNoteBranch(root.id);
+    focusNoteText(root.id);
+    refreshViewerOutline();
+    saveSoon();
+    return {root:root, failure:failure, existing:false};
+  }
+  function createInversionFailure(rootId){
+    var root = noteById(rootId);
+    var analysis = noteAnalysis(root);
+    if (!root || !analysis || analysis.tool !== 'inversion' || analysis.role !== 'root') return null;
+    return createChildNote(root.id, FAILURE_MODE_TEMPLATE, '', null, 'factor');
+  }
+  function createInversionSafeguard(factorId){
+    var factor = noteById(factorId);
+    if (!factor || noteKind(factor) !== 'factor' || !isInversionFailure(factor.id)) return null;
+    return createChildNote(factor.id, SAFEGUARD_TEMPLATE, '', null, 'action');
+  }
+  function runConsequences(ownerId){
+    var owner = noteById(ownerId);
+    if (!owner || noteKind(owner) !== 'option') return null;
+    var existing = consequenceNodesForOwner(owner.id);
+    if (existing.length){
+      focusNoteBranch(owner.id);
+      selectNote(existing[0].id);
+      focusNoteText(existing[0].id);
+      noteFeedback('Focused the existing consequence analysis.');
+      return {first:existing[0], existing:true};
+    }
+    var runId = 'analysis-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    var existingChildren = childLinksFrom(owner.id).length;
+    var first = createNote(owner.x + 300, owner.y + existingChildren * 132, consequenceTemplate(1), '', noteBucket(owner), {
+      kind:'outcome',
+      skipAutoLayout:true,
+      analysis:{tool:'consequences', role:'consequence', ownerId:owner.id, runId:runId, order:1, createdAt:Date.now()}
+    });
+    addNoteLink(owner.id, first.id, 'child');
+    renderAll();
+    focusNoteBranch(owner.id);
+    selectNote(first.id);
+    focusNoteText(first.id);
+    refreshViewerOutline();
+    saveSoon();
+    return {first:first, existing:false};
+  }
+  function createParallelConsequence(id){
+    var note = noteById(id);
+    return consequenceAnalysis(note) ? createSiblingNote(note.id, '', '') : null;
+  }
+  function createFirstConsequence(ownerId){
+    var owner = noteById(ownerId);
+    if (!owner || noteKind(owner) !== 'option') return null;
+    var existing = consequenceNodesForOwner(owner.id).filter(function(note){ return Number(consequenceAnalysis(note).order) === 1; });
+    return existing.length ? createSiblingNote(existing[existing.length - 1].id, '', '') : runConsequences(owner.id);
+  }
+  function createNextConsequence(id){
+    var note = noteById(id);
+    var analysis = consequenceAnalysis(note);
+    return analysis && Number(analysis.order) < 3 ? createChildNote(note.id, '', '') : null;
+  }
+  function decisionCommitSnapshot(root, chosenOptionId, rationale){
+    var branchIds = descendantNoteIds(root.id);
+    var included = Object.create(null);
+    branchIds.forEach(function(id){ included[id] = true; });
+    var snapshotNotes = notes.filter(function(note){ return included[note.id]; }).map(function(note){
+      return {
+        id:note.id,
+        content:note.content || 'New note',
+        kind:noteKind(note),
+        status:noteStatus(note),
+        bucket:noteBucket(note),
+        taskRefs:noteTaskRefs(note).map(function(ref){ return {uuid:ref.uuid, short:ref.short, desc:ref.desc, project:ref.project}; }),
+        createdAt:Number(note.createdAt) || 0,
+        updatedAt:Number(note.updatedAt) || 0,
+        analysis:noteAnalysis(note)
+      };
+    });
+    var snapshotLinks = links.filter(function(link){ return included[link.from] && included[link.to]; }).map(function(link){
+      var row = {from:link.from, to:link.to, type:NoteCore.normalizeRelation(link.type)};
+      var annotation = NoteCore.normalizeLinkAnnotation(link.annotation);
+      if (annotation) row.annotation = annotation;
+      return row;
+    });
+    var committedAt = Date.now();
+    return {
+      id:'commit-' + committedAt.toString(36) + '-' + Math.random().toString(36).slice(2, 7),
+      committedAt:committedAt,
+      chosenOptionId:chosenOptionId,
+      rationale:String(rationale || '').trim(),
+      notes:snapshotNotes,
+      links:snapshotLinks
+    };
+  }
+  function commitDecision(decisionId, optionId, rationale){
+    var root = noteById(decisionId);
+    var option = noteById(optionId);
+    if (!root || noteKind(root) !== 'decision' || !option || noteKind(option) !== 'option') return null;
+    if (!decisionOptions(root.id).some(function(candidate){ return candidate.id === option.id; })) return null;
+    var record = NoteCore.normalizeDecisionRecord(root.decisionRecord) || {chosenOptionId:'', commits:[]};
+    var commit = decisionCommitSnapshot(root, option.id, rationale);
+    root.decisionRecord = NoteCore.normalizeDecisionRecord({
+      chosenOptionId:option.id,
+      commits:record.commits.concat([commit])
+    });
+    root.status = 'resolved';
+    touchNote(root);
+    renderAll();
+    selectNote(option.id);
+    refreshViewerOutline();
+    saveNow();
+    noteFeedback('Decision committed. Alternative branches were preserved.');
+    return JSON.parse(JSON.stringify(commit));
+  }
+  function decisionHistory(id){
+    var root = decisionRootFor(id);
+    var record = root && NoteCore.normalizeDecisionRecord(root.decisionRecord);
+    return record ? JSON.parse(JSON.stringify(record)) : {chosenOptionId:'', commits:[]};
+  }
   function renderNote(n){
     var st = stage(); if (!st || !n) return null;
     var el = document.querySelector('.tcNoteNode[data-note-id="'+escAttr(n.id)+'"]');
@@ -2232,7 +2651,7 @@
       el.className = 'tcNoteNode';
       el.setAttribute('data-note-id', n.id);
       el.innerHTML =
-        '<div class="tcNoteHead"><div class="tcNoteMeta"><span class="tcNoteCode" title="Note"></span><span class="tcNoteKindBadge" hidden></span><button type="button" class="tcNoteBucketLabel" title="Edit bucket"></button><span class="tcNoteStatusBadge" hidden></span><button type="button" class="tcNoteTaskBadge" title="No linked tasks" hidden></button></div><div class="tcNoteActions"><button type="button" data-note-collapse title="Collapse branch">v</button><button type="button" data-note-child title="Add child note">+</button><button type="button" data-note-delete title="Delete selected notes">x</button></div></div>' +
+        '<div class="tcNoteHead"><div class="tcNoteMeta"><span class="tcNoteCode" title="Note"></span><span class="tcNoteKindBadge" hidden></span><span class="tcNoteAnalysisBadge" hidden></span><span class="tcNoteDecisionBadge" hidden></span><button type="button" class="tcNoteBucketLabel" title="Edit bucket"></button><span class="tcNoteStatusBadge" hidden></span><button type="button" class="tcNoteTaskBadge" title="No linked tasks" hidden></button></div><div class="tcNoteActions"><button type="button" data-note-collapse title="Collapse branch">v</button><button type="button" data-note-child title="Add child note">+</button><button type="button" data-note-delete title="Delete selected notes">x</button></div></div>' +
         '<div class="tcNoteText" contenteditable="true"></div>';
       st.appendChild(el);
       wireNote(el);
@@ -2247,6 +2666,10 @@
     el.classList.toggle('collapsed', !!n.collapsed);
     el.classList.toggle('statusResolved', noteStatus(n) === 'resolved');
     el.classList.toggle('statusParked', noteStatus(n) === 'parked');
+    var optionDecisionRoot = noteKind(n) === 'option' ? decisionRootFor(n.id) : null;
+    var optionDecisionRecord = optionDecisionRoot && NoteCore.normalizeDecisionRecord(optionDecisionRoot.decisionRecord);
+    var isChosenOption = !!(optionDecisionRecord && optionDecisionRecord.chosenOptionId === n.id);
+    el.classList.toggle('decisionChosen', isChosenOption);
     el.setAttribute('data-bucket', noteBucket(n));
     el.setAttribute('data-note-kind', noteKind(n));
     el.setAttribute('data-note-status', noteStatus(n));
@@ -2255,6 +2678,21 @@
       kindBadge.hidden = noteKind(n) === 'note';
       kindBadge.textContent = NoteCore.kindLabel(noteKind(n));
       kindBadge.title = 'Thinking role: ' + NoteCore.kindLabel(noteKind(n));
+    }
+    var analysisBadge = qs('.tcNoteAnalysisBadge', el);
+    var analysis = noteAnalysis(n);
+    if (analysisBadge){
+      analysisBadge.hidden = !analysis;
+      analysisBadge.textContent = analysis && analysis.tool === 'inversion' ? 'Inversion' : (analysis && analysis.tool === 'consequences' ? consequenceOrderLabel(analysis.order) : (analysis ? analysis.tool : ''));
+      analysisBadge.title = analysis ? ('Decision analysis: ' + analysis.tool + (analysis.tool === 'consequences' ? ', ' + consequenceOrderLabel(analysis.order) : '')) : '';
+    }
+    var decisionBadge = qs('.tcNoteDecisionBadge', el);
+    if (decisionBadge){
+      var rootRecord = noteKind(n) === 'decision' ? NoteCore.normalizeDecisionRecord(n.decisionRecord) : null;
+      var commitCount = rootRecord && rootRecord.commits ? rootRecord.commits.length : 0;
+      decisionBadge.hidden = !isChosenOption && !commitCount;
+      decisionBadge.textContent = isChosenOption ? 'Chosen' : (commitCount ? ('Committed ' + commitCount) : '');
+      decisionBadge.title = isChosenOption ? 'Currently chosen option' : (commitCount + ' decision snapshot' + (commitCount === 1 ? '' : 's'));
     }
     var statusBadge = qs('.tcNoteStatusBadge', el);
     if (statusBadge){
@@ -2469,7 +2907,10 @@
       palette:bucketPalette.slice(),
       kindOptions:NoteCore.kindOptions(),
       statusOptions:NoteCore.statusOptions(),
-      labels:labels
+      labels:labels,
+      decisionContext:picked.length === 1 ? decisionContextFor(primary) : null,
+      inversionContext:picked.length === 1 ? inversionContextFor(primary) : null,
+      consequenceContext:picked.length === 1 ? consequenceContextFor(primary) : null
     };
   }
   function notifyInspectorSelectionChanged(){
@@ -3408,14 +3849,34 @@
   }
   function createChildNote(parentId, title, body){
     var anchorId = arguments.length > 3 ? arguments[3] : null;
+    var requestedKind = arguments.length > 4 ? arguments[4] : '';
+    var requestedAnalysis = arguments.length > 5 ? NoteCore.normalizeAnalysis(arguments[5]) : null;
     var parent = noteById(parentId);
     if (!parent) return null;
+    var inversionRoot = inversionRootFor(parent.id);
+    var parentIsInversionRoot = inversionRoot && inversionRoot.id === parent.id;
+    var parentIsFailure = inversionRoot && isInversionFailure(parent.id);
+    var parentConsequence = consequenceAnalysis(parent);
+    var derivedConsequence = !requestedAnalysis && parentConsequence && Number(parentConsequence.order) < 3 ? {
+      tool:'consequences',
+      role:'consequence',
+      ownerId:parentConsequence.ownerId,
+      runId:parentConsequence.runId,
+      order:Number(parentConsequence.order) + 1,
+      createdAt:Date.now()
+    } : null;
+    var childAnalysis = requestedAnalysis || derivedConsequence;
+    var childKind = requestedKind ? NoteCore.normalizeKind(requestedKind) : (childAnalysis ? 'outcome' : (parentIsInversionRoot ? 'factor' : (parentIsFailure ? 'action' : (noteKind(parent) === 'decision' ? 'option' : (noteKind(parent) === 'option' ? 'outcome' : 'note')))));
+    var childTitle = title || (childAnalysis ? consequenceTemplate(childAnalysis.order) : (parentIsInversionRoot && childKind === 'factor' ? FAILURE_MODE_TEMPLATE : (parentIsFailure && childKind === 'action' ? SAFEGUARD_TEMPLATE : decisionTemplateForKind(childKind))));
     parent.collapsed = false;
     var anchor = anchorId ? noteById(anchorId) : null;
     var existing = childLinksFrom(parentId).length;
     var childX = parent.x + 300;
     var childY = anchor ? toInt(anchor.y, parent.y + existing * 124) : parent.y + existing * 124;
-    var child = createNote(childX, childY, title || 'New branch', body || '', noteBucket(parent), anchor ? { skipAutoLayout: true } : null);
+    var childOptions = {kind:childKind};
+    if (childAnalysis) childOptions.analysis = childAnalysis;
+    if (anchor) childOptions.skipAutoLayout = true;
+    var child = createNote(childX, childY, childTitle, body || '', noteBucket(parent), childOptions);
     addNoteLink(parent.id, child.id, 'child');
     syncNoteLabels();
     if (anchor){
@@ -3436,11 +3897,26 @@
   function createSiblingNote(id, title, body){
     var n = noteById(id);
     if (!n) return null;
+    var currentKind = noteKind(n);
+    var inversionRoot = inversionRootFor(n.id);
+    var inversionFailure = inversionRoot && isInversionFailure(n.id);
+    var inversionSafeguard = inversionRoot && currentKind === 'action';
+    var currentConsequence = consequenceAnalysis(n);
+    var siblingAnalysis = currentConsequence ? {
+      tool:'consequences',
+      role:'consequence',
+      ownerId:currentConsequence.ownerId,
+      runId:currentConsequence.runId,
+      order:Number(currentConsequence.order),
+      createdAt:Date.now()
+    } : null;
+    var siblingKind = currentConsequence ? 'outcome' : (currentKind === 'factor' || currentKind === 'option' || currentKind === 'outcome' || inversionSafeguard ? currentKind : 'note');
+    var siblingTitle = title || (siblingAnalysis ? consequenceTemplate(siblingAnalysis.order) : (inversionFailure ? FAILURE_MODE_TEMPLATE : (inversionSafeguard ? SAFEGUARD_TEMPLATE : decisionTemplateForKind(siblingKind))));
     var parentLink = parentLinkFor(id);
     if (parentLink){
       var siblingOf = noteById(parentLink.from);
       if (!siblingOf) return null;
-      var sibling = createNote(n.x, n.y + 132, title || 'New branch', body || '', noteBucket(n), { skipAutoLayout: true });
+      var sibling = createNote(n.x, n.y + 132, siblingTitle, body || '', noteBucket(n), {skipAutoLayout:true, kind:siblingKind, analysis:siblingAnalysis});
       addNoteLink(parentLink.from, sibling.id, 'child');
       insertNoteBelowReference(sibling, n);
       syncNoteLabels();
@@ -3456,7 +3932,7 @@
       saveSoon();
       return sibling;
     }
-    var sibling = createNote(n.x, n.y + 132, title || 'New branch', body || '', noteBucket(n), { skipAutoLayout: true });
+    var sibling = createNote(n.x, n.y + 132, siblingTitle, body || '', noteBucket(n), {skipAutoLayout:true, kind:siblingKind, analysis:siblingAnalysis});
     insertNoteBelowReference(sibling, n);
     syncNoteLabels();
     renderBuckets();
@@ -3740,11 +4216,15 @@
     });
     return {
       kind: 'kyanbasu.notes',
-      version: 5,
+      version: 7,
       exportedAt: new Date().toISOString(),
       notes: notes.map(function(n){
         var row = {id:n.id, x:toInt(n.x, 160), y:toInt(n.y, 160), content:n.content || 'New note', bucket:noteBucket(n), kind:noteKind(n), status:noteStatus(n), collapsed:!!n.collapsed, taskRefs:noteTaskRefs(n).slice(), createdAt:Number(n.createdAt) || 0, updatedAt:Number(n.updatedAt) || 0, reviewedAt:Number(n.reviewedAt) || 0};
         if (n.color) row.color = n.color;
+        var analysis = noteAnalysis(n);
+        if (analysis) row.analysis = analysis;
+        var decisionRecord = NoteCore.normalizeDecisionRecord(n.decisionRecord);
+        if (decisionRecord) row.decisionRecord = decisionRecord;
         return row;
       }),
       links: links.map(function(l){
@@ -3898,6 +4378,15 @@
   }
   window.KyanbasuNotes = {
     createNote: createNote,
+    createDecisionMap: createDecisionMap,
+    createDecisionChild: createDecisionChild,
+    runInversion: runInversion,
+    createInversionFailure: createInversionFailure,
+    createInversionSafeguard: createInversionSafeguard,
+    runConsequences: runConsequences,
+    createFirstConsequence: createFirstConsequence,
+    createParallelConsequence: createParallelConsequence,
+    createNextConsequence: createNextConsequence,
     createChildNote: createChildNote,
     createSiblingNote: createSiblingNote,
     deleteSelectedNotes: deleteSelectedNotes,
@@ -3933,6 +4422,11 @@
     renameLens: renameCustomLens,
     deleteLens: deleteCustomLens,
     markReviewed: markNoteReviewed,
+    commitDecision: commitDecision,
+    decisionHistory: decisionHistory,
+    decisionContext: decisionContextFor,
+    inversionContext: inversionContextFor,
+    consequenceContext: consequenceContextFor,
     startReview: startNoteReview,
     stopReview: stopNoteReview,
     nextReview: function(){ return moveNoteReview(1); },

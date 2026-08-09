@@ -3115,6 +3115,165 @@ function wireNoteInspectorColors(notes){
     });
   });
 }
+function decisionInspectorHtml(context){
+  if (!context) return '';
+  var checklist = Array.isArray(context.checklist) ? context.checklist : [];
+  var options = Array.isArray(context.options) ? context.options : [];
+  var complete = checklist.filter(function(item){ return !!item.complete; }).length;
+  return '<div class="inspectorGroup" data-decision-inspector>' +
+    '<div class="inspectorLabel">Decision map</div>' +
+    '<div class="inspectorChips">' +
+      '<span class="inspectorChip info">'+complete+'/'+checklist.length+' review checks</span>' +
+      (context.commitCount ? '<span class="inspectorChip success">'+context.commitCount+' commit'+(context.commitCount === 1 ? '' : 's')+'</span>' : '<span class="inspectorChip warn">Not committed</span>') +
+    '</div>' +
+    (context.chosenOptionLabel
+      ? '<div class="inspectorList"><div class="inspectorListItem"><strong>Chosen option</strong><div class="inspectorItemMeta">'+escapeHtml(noteInspectorText(context.chosenOptionLabel, 'Option'))+'</div></div></div>'
+      : '') +
+    '<div id="inspectorDecisionChecklist" class="inspectorList">' +
+      checklist.map(function(item){
+        return '<div class="inspectorListItem"><strong>'+(item.complete ? '&#10003;' : '&#9675;')+' '+escapeHtml(item.label || '')+'</strong></div>';
+      }).join('') +
+    '</div>' +
+    '<div class="inspectorChips">' +
+      options.map(function(option){ return '<span class="inspectorChip '+(option.chosen ? 'success' : '')+'">'+escapeHtml(noteInspectorText(option.label, 'Option'))+'</span>'; }).join('') +
+    '</div>' +
+    '<button id="inspectorDecisionAddOption" class="inspectorInput" type="button">Add option</button>' +
+    '<button id="inspectorDecisionAddFactor" class="inspectorInput" type="button">Add factor</button>' +
+    (context.selectedKind === 'option' ? '<button id="inspectorDecisionAddOutcome" class="inspectorInput" type="button">Add possible outcome</button>' : '') +
+    (context.canCommit
+      ? '<div class="inspectorLabel">Choice rationale</div>' +
+        '<textarea id="inspectorDecisionRationale" class="inspectorField" spellcheck="true" placeholder="Why is this the best option given what is known now?"></textarea>' +
+        '<button id="inspectorDecisionCommit" class="inspectorInput" type="button">Commit this option</button>'
+      : '<div class="inspectorEmpty"><div>Select an option note to commit it. Alternative branches will remain visible.</div></div>') +
+    (context.lastCommittedAt ? '<div class="inspectorItemMeta">Last committed '+escapeHtml(noteInspectorAge(context.lastCommittedAt, 'Unknown'))+'.</div>' : '') +
+  '</div>';
+}
+function wireDecisionInspector(context){
+  if (!context || !window.KyanbasuNotes) return;
+  var api = window.KyanbasuNotes;
+  var addOption = document.getElementById('inspectorDecisionAddOption');
+  var addFactor = document.getElementById('inspectorDecisionAddFactor');
+  var addOutcome = document.getElementById('inspectorDecisionAddOutcome');
+  var commit = document.getElementById('inspectorDecisionCommit');
+  if (addOption && typeof api.createDecisionChild === 'function') addOption.addEventListener('click', function(){
+    api.createDecisionChild(context.rootId, 'option');
+    queueInspectorRender(0);
+  });
+  if (addFactor && typeof api.createDecisionChild === 'function') addFactor.addEventListener('click', function(){
+    api.createDecisionChild(context.rootId, 'factor');
+    queueInspectorRender(0);
+  });
+  if (addOutcome && typeof api.createChildNote === 'function') addOutcome.addEventListener('click', function(){
+    api.createChildNote(context.selectedId);
+    queueInspectorRender(0);
+  });
+  if (commit && typeof api.commitDecision === 'function') commit.addEventListener('click', function(){
+    var rationale = document.getElementById('inspectorDecisionRationale');
+    api.commitDecision(context.rootId, context.selectedId, rationale ? rationale.value : '');
+    queueInspectorRender(0);
+  });
+}
+function inversionInspectorHtml(context){
+  if (!context) return '';
+  if (!context.rootId){
+    return '<div class="inspectorGroup" data-inversion-inspector>' +
+      '<div class="inspectorLabel">Decision tools</div>' +
+      '<div class="inspectorEmpty"><div>Invert the desired outcome to expose failure modes before committing.</div></div>' +
+      '<button id="inspectorInversionRun" class="inspectorInput" type="button">Run inversion</button>' +
+    '</div>';
+  }
+  return '<div class="inspectorGroup" data-inversion-inspector>' +
+    '<div class="inspectorLabel">Inversion</div>' +
+    '<div class="inspectorChips">' +
+      '<span class="inspectorChip '+(context.complete ? 'success' : 'warn')+'">'+(context.complete ? 'Ready' : 'Needs review')+'</span>' +
+      '<span class="inspectorChip info">'+context.failureCount+' failure mode'+(context.failureCount === 1 ? '' : 's')+'</span>' +
+      (context.unprotected ? '<span class="inspectorChip warn">'+context.unprotected+' unprotected</span>' : '') +
+      (context.missingSignals ? '<span class="inspectorChip warn">'+context.missingSignals+' without warning</span>' : '') +
+    '</div>' +
+    '<div id="inspectorInversionChecklist" class="inspectorList">' +
+      '<div class="inspectorListItem"><strong>'+(context.oppositeRecorded ? '&#10003;' : '&#9675;')+' Opposite outcome recorded</strong></div>' +
+      '<div class="inspectorListItem"><strong>'+(context.failureCount ? '&#10003;' : '&#9675;')+' Failure modes identified</strong></div>' +
+      '<div class="inspectorListItem"><strong>'+(!context.missingSignals && context.failureCount ? '&#10003;' : '&#9675;')+' Early warnings recorded</strong></div>' +
+      '<div class="inspectorListItem"><strong>'+(!context.unprotected && context.failureCount ? '&#10003;' : '&#9675;')+' Safeguards attached</strong></div>' +
+    '</div>' +
+    (context.selectedId !== context.rootId ? '<button id="inspectorInversionFocus" class="inspectorInput" type="button">Focus inversion branch</button>' : '') +
+    '<button id="inspectorInversionAddFailure" class="inspectorInput" type="button">Add failure mode</button>' +
+    (context.canAddSafeguard ? '<button id="inspectorInversionAddSafeguard" class="inspectorInput" type="button">Add safeguard</button>' : '') +
+  '</div>';
+}
+function wireInversionInspector(context){
+  if (!context || !window.KyanbasuNotes) return;
+  var api = window.KyanbasuNotes;
+  var run = document.getElementById('inspectorInversionRun');
+  var focus = document.getElementById('inspectorInversionFocus');
+  var addFailure = document.getElementById('inspectorInversionAddFailure');
+  var addSafeguard = document.getElementById('inspectorInversionAddSafeguard');
+  if (run && typeof api.runInversion === 'function') run.addEventListener('click', function(){
+    api.runInversion(context.ownerId);
+    queueInspectorRender(0);
+  });
+  if (focus && typeof api.focusBranch === 'function') focus.addEventListener('click', function(){
+    api.focusBranch(context.rootId);
+    queueInspectorRender(0);
+  });
+  if (addFailure && typeof api.createInversionFailure === 'function') addFailure.addEventListener('click', function(){
+    api.createInversionFailure(context.rootId);
+    queueInspectorRender(0);
+  });
+  if (addSafeguard && typeof api.createInversionSafeguard === 'function') addSafeguard.addEventListener('click', function(){
+    api.createInversionSafeguard(context.selectedId);
+    queueInspectorRender(0);
+  });
+}
+function consequenceInspectorHtml(context){
+  if (!context) return '';
+  if (!context.hasRun){
+    return '<div class="inspectorGroup" data-consequence-inspector>' +
+      '<div class="inspectorLabel">Consequence chain</div>' +
+      '<div class="inspectorEmpty"><div>Trace what follows from this option through immediate, downstream, and longer-range effects.</div></div>' +
+      '<button id="inspectorConsequenceRun" class="inspectorInput" type="button">Explore consequences</button>' +
+    '</div>';
+  }
+  var counts = context.counts || {1:0, 2:0, 3:0};
+  return '<div class="inspectorGroup" data-consequence-inspector>' +
+    '<div class="inspectorLabel">Consequence chain</div>' +
+    '<div class="inspectorChips">' +
+      '<span class="inspectorChip '+(context.complete ? 'success' : 'warn')+'">'+(context.complete ? 'Three orders traced' : 'Needs depth')+'</span>' +
+      '<span class="inspectorChip info">1st '+(counts[1] || 0)+'</span>' +
+      '<span class="inspectorChip info">2nd '+(counts[2] || 0)+'</span>' +
+      '<span class="inspectorChip info">3rd '+(counts[3] || 0)+'</span>' +
+      (context.earlyStops ? '<span class="inspectorChip warn">'+context.earlyStops+' branch'+(context.earlyStops === 1 ? '' : 'es')+' end early</span>' : '') +
+    '</div>' +
+    '<div class="inspectorEmpty"><div>Record several plausible effects where uncertainty branches. Depth is a prompt for thought, not a score.</div></div>' +
+    (context.canAddFirst ? '<button id="inspectorConsequenceAddFirst" class="inspectorInput" type="button">Add 1st-order consequence</button>' : '') +
+    (context.canAddParallel ? '<button id="inspectorConsequenceAddParallel" class="inspectorInput" type="button">Add parallel '+(context.selectedOrder === 1 ? '1st' : (context.selectedOrder === 2 ? '2nd' : '3rd'))+'-order consequence</button>' : '') +
+    (context.canAddNext ? '<button id="inspectorConsequenceAddNext" class="inspectorInput" type="button">Add '+(context.selectedOrder === 1 ? '2nd' : '3rd')+'-order consequence</button>' : '') +
+  '</div>';
+}
+function wireConsequenceInspector(context){
+  if (!context || !window.KyanbasuNotes) return;
+  var api = window.KyanbasuNotes;
+  var run = document.getElementById('inspectorConsequenceRun');
+  var addFirst = document.getElementById('inspectorConsequenceAddFirst');
+  var addParallel = document.getElementById('inspectorConsequenceAddParallel');
+  var addNext = document.getElementById('inspectorConsequenceAddNext');
+  if (run && typeof api.runConsequences === 'function') run.addEventListener('click', function(){
+    api.runConsequences(context.ownerId);
+    queueInspectorRender(0);
+  });
+  if (addFirst && typeof api.createFirstConsequence === 'function') addFirst.addEventListener('click', function(){
+    api.createFirstConsequence(context.ownerId);
+    queueInspectorRender(0);
+  });
+  if (addParallel && typeof api.createParallelConsequence === 'function') addParallel.addEventListener('click', function(){
+    api.createParallelConsequence(context.selectedId);
+    queueInspectorRender(0);
+  });
+  if (addNext && typeof api.createNextConsequence === 'function') addNext.addEventListener('click', function(){
+    api.createNextConsequence(context.selectedId);
+    queueInspectorRender(0);
+  });
+}
 function renderNoteInspector(snapshot){
   var api = window.KyanbasuNotes || null;
   var selectedNotes = (snapshot && snapshot.selectedNotes) || [];
@@ -3225,6 +3384,9 @@ function renderNoteInspector(snapshot){
       '<div class="inspectorLabel">'+(selectedNotes.length === 1 ? 'Note' : 'Selected notes')+'</div>' +
       noteInspectorRows(selectedNotes) +
     '</div>' +
+    (selectedNotes.length === 1 ? decisionInspectorHtml(snapshot.decisionContext) : '') +
+    (selectedNotes.length === 1 ? inversionInspectorHtml(snapshot.inversionContext) : '') +
+    (selectedNotes.length === 1 ? consequenceInspectorHtml(snapshot.consequenceContext) : '') +
     '<div class="inspectorGroup">' +
       '<div class="inspectorLabel">Bucket</div>' +
       (selectedNotes.length === 1
@@ -3263,6 +3425,9 @@ function renderNoteInspector(snapshot){
   wireNoteInspectorBucket(selectedNotes);
   wireNoteInspectorSemantics(selectedNotes);
   wireNoteInspectorColors(selectedNotes);
+  wireDecisionInspector(snapshot.decisionContext);
+  wireInversionInspector(snapshot.inversionContext);
+  wireConsequenceInspector(snapshot.consequenceContext);
   if (selectedNotes.length === 1){
     wireNoteInspectorEditor(primary);
     var reviewedButton = document.getElementById('inspectorNoteReviewed');

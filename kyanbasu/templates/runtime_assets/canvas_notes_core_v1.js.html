@@ -9,6 +9,9 @@
     {value:'evidence', label:'Evidence'},
     {value:'assumption', label:'Assumption'},
     {value:'decision', label:'Decision'},
+    {value:'factor', label:'Factor'},
+    {value:'option', label:'Option'},
+    {value:'outcome', label:'Outcome'},
     {value:'action', label:'Action'},
     {value:'reference', label:'Reference'}
   ];
@@ -144,6 +147,77 @@
     };
   }
 
+  function normalizeAnalysis(analysis){
+    if (!analysis || typeof analysis !== 'object') return null;
+    var tool = String(analysis.tool || '').trim().toLowerCase();
+    var role = String(analysis.role || '').trim().toLowerCase();
+    var ownerId = String(analysis.ownerId || '').trim();
+    var runId = String(analysis.runId || '').trim();
+    if (!tool || !role || !ownerId || !runId || !/^[a-z0-9_-]+$/.test(tool) || !/^[a-z0-9_-]+$/.test(role)) return null;
+    var row = {
+      tool:tool,
+      role:role,
+      ownerId:ownerId,
+      runId:runId,
+      createdAt:timestamp(analysis.createdAt, 0)
+    };
+    var order = parseInt(analysis.order, 10);
+    if (isFinite(order) && order > 0) row.order = order;
+    return row;
+  }
+
+  function normalizeDecisionSnapshotNote(note){
+    if (!note || typeof note !== 'object' || !note.id) return null;
+    var row = {
+      id: String(note.id),
+      content: String(note.content || 'New note'),
+      kind: normalizeKind(note.kind),
+      status: normalizeStatus(note.status),
+      bucket: bucketText(note.bucket),
+      taskRefs: Array.isArray(note.taskRefs) ? note.taskRefs.map(normalizeTaskRef).filter(Boolean) : [],
+      createdAt: timestamp(note.createdAt, 0),
+      updatedAt: timestamp(note.updatedAt, 0)
+    };
+    var analysis = normalizeAnalysis(note.analysis);
+    if (analysis) row.analysis = analysis;
+    return row;
+  }
+
+  function normalizeDecisionSnapshotLink(link){
+    if (!link || typeof link !== 'object' || !link.from || !link.to) return null;
+    var row = {
+      from: String(link.from),
+      to: String(link.to),
+      type: normalizeRelation(link.type)
+    };
+    var annotation = normalizeLinkAnnotation(link.annotation);
+    if (annotation) row.annotation = annotation;
+    return row;
+  }
+
+  function normalizeDecisionCommit(commit){
+    if (!commit || typeof commit !== 'object') return null;
+    var committedAt = timestamp(commit.committedAt, 0);
+    var chosenOptionId = String(commit.chosenOptionId || '').trim();
+    if (!committedAt || !chosenOptionId) return null;
+    return {
+      id: String(commit.id || ('commit-' + committedAt)),
+      committedAt: committedAt,
+      chosenOptionId: chosenOptionId,
+      rationale: String(commit.rationale || '').trim(),
+      notes: Array.isArray(commit.notes) ? commit.notes.map(normalizeDecisionSnapshotNote).filter(Boolean) : [],
+      links: Array.isArray(commit.links) ? commit.links.map(normalizeDecisionSnapshotLink).filter(Boolean) : []
+    };
+  }
+
+  function normalizeDecisionRecord(record){
+    if (!record || typeof record !== 'object') return null;
+    var commits = Array.isArray(record.commits) ? record.commits.map(normalizeDecisionCommit).filter(Boolean) : [];
+    var chosenOptionId = String(record.chosenOptionId || (commits.length ? commits[commits.length - 1].chosenOptionId : '')).trim();
+    if (!chosenOptionId && !commits.length) return null;
+    return {chosenOptionId:chosenOptionId, commits:commits};
+  }
+
   function normalizeNote(note, options){
     note = note || {};
     options = options || {};
@@ -164,6 +238,12 @@
     note.createdAt = timestamp(note.createdAt, now);
     note.updatedAt = timestamp(note.updatedAt, note.createdAt);
     note.reviewedAt = timestamp(note.reviewedAt, 0);
+    var analysis = normalizeAnalysis(note.analysis);
+    if (analysis) note.analysis = analysis;
+    else delete note.analysis;
+    var decisionRecord = normalizeDecisionRecord(note.decisionRecord);
+    if (decisionRecord) note.decisionRecord = decisionRecord;
+    else delete note.decisionRecord;
     return note;
   }
 
@@ -445,10 +525,12 @@
   }
 
   window.KyanbasuNotesCore = {
-    version: 5,
+    version: 7,
     bucketText: bucketText,
     noteText: noteText,
     normalizeTaskRef: normalizeTaskRef,
+    normalizeAnalysis: normalizeAnalysis,
+    normalizeDecisionRecord: normalizeDecisionRecord,
     normalizeNote: normalizeNote,
     normalizeKind: normalizeKind,
     normalizeStatus: normalizeStatus,

@@ -12,6 +12,8 @@ Task changes become plain `task` commands that you can review, edit, and copy ba
 
 [Changelog](CHANGELOG.md)
 
+[Decision method](docs/DECISION_METHOD.md)
+
 ---
 
 ## What it does
@@ -75,6 +77,8 @@ kyanbasu --filter "due.before:today"  # any filter string
 - Note identifiers, search, focus mode, editable outliner, colours, multi-selection, and import/export support larger maps.
 
 - Relationship annotations add a label or question directly to a note link.
+
+- Guided decision maps preserve factors, options, possible outcomes, branching first/second/third-order consequence analyses, inversion analyses, choice rationale, and immutable choice-time snapshots for later review.
 
 - Multiple workbenches separate contexts while keeping them in one generated workspace.
 

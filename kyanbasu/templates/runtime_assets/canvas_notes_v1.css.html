@@ -395,7 +395,33 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .tcNoteDecisionBadge {
+    flex: 0 0 auto;
+    padding: 2px 5px;
+    border: 1px solid rgba(47,191,113,.38);
+    border-radius: 999px;
+    background: rgba(47,191,113,.14);
+    color: #a9edc5;
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .tcNoteAnalysisBadge {
+    flex: 0 0 auto;
+    padding: 2px 5px;
+    border: 1px solid rgba(236,122,114,.42);
+    border-radius: 999px;
+    background: rgba(236,122,114,.14);
+    color: #ffc0ba;
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 1;
+    white-space: nowrap;
+  }
   .tcNoteKindBadge[hidden],
+  .tcNoteAnalysisBadge[hidden],
+  .tcNoteDecisionBadge[hidden],
   .tcNoteStatusBadge[hidden] { display: none; }
   .tcNoteStatusBadge {
     flex: 0 0 14px;
@@ -417,6 +443,10 @@
   }
   .tcNoteNode.statusResolved .tcNoteText { opacity: .76; }
   .tcNoteNode.statusParked { opacity: .82; }
+  .tcNoteNode.decisionChosen {
+    border-color: rgba(47,191,113,.86);
+    box-shadow: 0 14px 34px rgba(0,0,0,.28), 0 0 0 2px rgba(47,191,113,.28), 0 0 24px rgba(47,191,113,.14);
+  }
   .tcNoteBucketLabel {
     max-width: 84px;
     min-width: 0;

@@ -958,7 +958,7 @@ window.addEventListener('load', function(){
         self.assertEqual(result["directionChevrons"], 1)
         self.assertEqual(result["apiNotes"], 2)
         self.assertEqual(result["apiLinks"], 1)
-        self.assertEqual(result["coreVersion"], 5)
+        self.assertEqual(result["coreVersion"], 7)
         self.assertTrue(result["rejectsSelfChild"])
         self.assertEqual(result["legacyContent"], "Old title\nOld body")
         self.assertEqual(result["legacyKind"], "note")
@@ -1043,10 +1043,390 @@ window.addEventListener('load', function(){
         self.assertEqual(result["status"], "parked")
         self.assertEqual(result["cardKind"], "Decision")
         self.assertEqual(result["cardStatus"], "Status: Parked")
-        self.assertEqual(result["exportedVersion"], 5)
+        self.assertEqual(result["exportedVersion"], 7)
         self.assertEqual(result["exportedKind"], "decision")
         self.assertEqual(result["exportedStatus"], "parked")
         self.assertEqual(result["viewerSemantics"], ["Decision", "Parked"])
+
+    def test_canvas_decision_maps_commit_immutable_history_and_round_trip(self):
+        base_html = Path("kyanbasu/templates/kyanbasu.base.html").read_text(encoding="utf-8")
+        payload = json.dumps({"tasks": [], "graph": {"edges": [], "parent_current_deps": {}, "child_to_parents": {}}})
+        html = build_runtime_html(base_html, payload, 0, lambda *_: None)
+
+        harness = """
+<script id="E2E_CANVAS_DECISION_MAP_HARNESS">
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    try{
+      var api = window.KyanbasuNotes;
+      var created = api.createDecisionMap(180, 300, 'Decisions');
+      var root = created.root;
+      var optionA = created.options[0];
+      var optionB = created.options[1];
+      api.setContent(root.id, 'Decision: Choose a focus\\nTarget outcome: Ship a useful result\\nSuccess means: Used for one week\\nDecision needed by: Friday\\nReassess by: Next Friday');
+      api.setContent(optionA.id, 'Option: Build the smaller workflow');
+      api.setContent(optionB.id, 'Option: Keep the current process');
+      var outcomeA = api.createChildNote(optionA.id);
+      var outcomeB = api.createChildNote(optionB.id);
+      api.setContent(outcomeA.id, 'Possible outcome: Faster planning\\nBest estimate: 60%\\nReasonable range: 40-75%\\nPayoff / cost: Less friction');
+      api.setContent(outcomeB.id, 'Possible outcome: No migration cost\\nBest estimate: 80%\\nReasonable range: 65-90%\\nPayoff / cost: No improvement');
+      var evidence = api.createChildNote(created.factor.id, 'Outside view: similar small workflows were adopted', '');
+      api.setNoteKind(evidence.id, 'evidence');
+      api.selectNote(optionA.id);
+      setTimeout(function(){
+        var checklist = api.decisionContext(optionA.id).checklist;
+        var commitButton = document.getElementById('inspectorDecisionCommit');
+        var inspectorChecklistPresent = !!document.getElementById('inspectorDecisionChecklist');
+        var rationale = document.getElementById('inspectorDecisionRationale');
+        if (rationale) rationale.value = 'Best fit for the current constraints';
+        if (!commitButton) throw new Error('Decision commit control missing');
+        commitButton.click();
+        setTimeout(function(){
+          var firstHistory = api.decisionHistory(root.id);
+          api.setContent(optionA.id, 'Option: Edited after the first commitment');
+          api.commitDecision(root.id, optionB.id, 'Lower immediate cost after new information');
+          var history = api.decisionHistory(root.id);
+          var firstOptionSnapshot = history.commits[0].notes.filter(function(note){ return note.id === optionA.id; })[0];
+          var secondOptionSnapshot = history.commits[1].notes.filter(function(note){ return note.id === optionA.id; })[0];
+          var exported = api.exportData();
+          window.KyanbasuWorkbenches.capture();
+          var workbenches = window.KyanbasuWorkbenches.exportData();
+          var workbenchRoot = workbenches.workbenches[0].notes.notes.filter(function(note){ return note.id === root.id; })[0];
+          api.importData(exported);
+          setTimeout(function(){
+            var importedHistory = api.decisionHistory(root.id);
+            var chosenCard = document.querySelector('.tcNoteNode[data-note-id="'+optionB.id+'"]');
+            var rootNote = api.notes().filter(function(note){ return note.id === root.id; })[0];
+            var alternatives = api.notes().filter(function(note){ return note.id === optionA.id || note.id === optionB.id; });
+            var kinds = api.noteKinds().map(function(item){ return item.value; });
+            var out = {
+              decisionButton:!!document.getElementById('noteDecisionBtn'),
+              mapKinds:api.notes().map(function(note){ return note.kind; }),
+              semanticKinds:[kinds.indexOf('factor') >= 0, kinds.indexOf('option') >= 0, kinds.indexOf('outcome') >= 0],
+              optionCount:created.options.length,
+              outcomeKinds:[outcomeA.kind, outcomeB.kind],
+              reviewComplete:checklist.filter(function(item){ return item.complete; }).length,
+              reviewTotal:checklist.length,
+              inspectorChecklist:inspectorChecklistPresent,
+              firstCommitCount:firstHistory.commits.length,
+              commitCount:history.commits.length,
+              chosenOptionId:history.chosenOptionId,
+              expectedChosenOptionId:optionB.id,
+              firstRationale:history.commits[0].rationale,
+              firstSnapshot:firstOptionSnapshot && firstOptionSnapshot.content,
+              secondSnapshot:secondOptionSnapshot && secondOptionSnapshot.content,
+              rootStatus:rootNote && rootNote.status,
+              alternativeStatuses:alternatives.map(function(note){ return note.status; }),
+              chosenBadge:chosenCard && (chosenCard.querySelector('.tcNoteDecisionBadge') || {}).textContent,
+              chosenClass:chosenCard && chosenCard.classList.contains('decisionChosen'),
+              exportedVersion:exported.version,
+              exportedCommits:exported.notes.filter(function(note){ return note.id === root.id; })[0].decisionRecord.commits.length,
+              workbenchCommits:workbenchRoot.decisionRecord.commits.length,
+              importedCommits:importedHistory.commits.length,
+              commands:(window.STAGED_CMDS || []).slice()
+            };
+            var pre = document.createElement('pre');
+            pre.id = 'e2e-out';
+            pre.textContent = JSON.stringify(out);
+            document.body.appendChild(pre);
+          }, 180);
+        }, 180);
+      }, 180);
+    }catch(e){
+      var pre2 = document.createElement('pre');
+      pre2.id = 'e2e-out';
+      pre2.textContent = 'ERR:' + (e && e.message ? e.message : String(e));
+      document.body.appendChild(pre2);
+    }
+  }, 800);
+});
+</script>
+"""
+        html = html.replace("</body>", harness + "\n</body>")
+        raw = self._run_html_harness(html)
+        self.assertNotIn("ERR:", raw)
+        result = json.loads(raw)
+        self.assertTrue(result["decisionButton"], msg=json.dumps(result))
+        self.assertEqual(result["semanticKinds"], [True, True, True], msg=json.dumps(result))
+        self.assertEqual(result["optionCount"], 2, msg=json.dumps(result))
+        self.assertEqual(result["outcomeKinds"], ["outcome", "outcome"], msg=json.dumps(result))
+        self.assertEqual(result["reviewComplete"], result["reviewTotal"], msg=json.dumps(result))
+        self.assertEqual(result["reviewTotal"], 7, msg=json.dumps(result))
+        self.assertTrue(result["inspectorChecklist"], msg=json.dumps(result))
+        self.assertEqual(result["firstCommitCount"], 1, msg=json.dumps(result))
+        self.assertEqual(result["commitCount"], 2, msg=json.dumps(result))
+        self.assertEqual(result["chosenOptionId"], result["expectedChosenOptionId"], msg=json.dumps(result))
+        self.assertEqual(result["firstRationale"], "Best fit for the current constraints", msg=json.dumps(result))
+        self.assertEqual(result["firstSnapshot"], "Option: Build the smaller workflow", msg=json.dumps(result))
+        self.assertEqual(result["secondSnapshot"], "Option: Edited after the first commitment", msg=json.dumps(result))
+        self.assertEqual(result["rootStatus"], "resolved", msg=json.dumps(result))
+        self.assertEqual(result["alternativeStatuses"], ["open", "open"], msg=json.dumps(result))
+        self.assertEqual(result["chosenBadge"], "Chosen", msg=json.dumps(result))
+        self.assertTrue(result["chosenClass"], msg=json.dumps(result))
+        self.assertEqual(result["exportedVersion"], 7, msg=json.dumps(result))
+        self.assertEqual(result["exportedCommits"], 2, msg=json.dumps(result))
+        self.assertEqual(result["workbenchCommits"], 2, msg=json.dumps(result))
+        self.assertEqual(result["importedCommits"], 2, msg=json.dumps(result))
+        self.assertEqual(result["commands"], [], msg=json.dumps(result))
+
+    def test_canvas_inversion_analysis_builds_safeguards_and_survives_snapshots(self):
+        base_html = Path("kyanbasu/templates/kyanbasu.base.html").read_text(encoding="utf-8")
+        payload = json.dumps({"tasks": [], "graph": {"edges": [], "parent_current_deps": {}, "child_to_parents": {}}})
+        html = build_runtime_html(base_html, payload, 0, lambda *_: None)
+
+        harness = """
+<script id="E2E_CANVAS_INVERSION_HARNESS">
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    try{
+      var api = window.KyanbasuNotes;
+      var created = api.createDecisionMap(180, 300, 'Decisions');
+      var root = created.root;
+      var option = created.options[0];
+      api.setContent(root.id, 'Decision: Choose a delivery approach\\nTarget outcome: Deliver a useful release\\nSuccess means: Used for one week\\nDecision needed by: Friday\\nReassess by: Next Friday');
+      api.setContent(option.id, 'Option: Ship the smallest coherent workflow');
+      api.selectNote(option.id);
+      setTimeout(function(){
+        var runButton = document.getElementById('inspectorInversionRun');
+        if (!runButton) throw new Error('Run inversion control missing');
+        runButton.click();
+        setTimeout(function(){
+          var inversionRoot = api.notes().filter(function(note){ return note.analysis && note.analysis.tool === 'inversion'; })[0];
+          if (!inversionRoot) throw new Error('Inversion root missing');
+          var failure = api.notes().filter(function(note){
+            return note.kind === 'factor' && api.links().some(function(link){ return link.type === 'child' && link.from === inversionRoot.id && link.to === note.id; });
+          })[0];
+          if (!failure) throw new Error('Failure mode missing');
+          var initial = api.inversionContext(inversionRoot.id);
+          api.setContent(inversionRoot.id, 'INVERSION\\nDesired outcome: Deliver a useful release\\nAnalysed option: Ship the smallest coherent workflow\\nOpposite outcome: Release is abandoned and creates rework\\nHow could I deliberately cause the opposite outcome?');
+          api.setContent(failure.id, 'Failure mode: Build too much before use\\nHow could this happen? Expand scope without feedback\\nEarly warning: No real use after three days\\nWithin my control: Yes');
+          api.selectNote(failure.id);
+          setTimeout(function(){
+            var safeguardButton = document.getElementById('inspectorInversionAddSafeguard');
+            if (!safeguardButton) throw new Error('Add safeguard control missing');
+            safeguardButton.click();
+            setTimeout(function(){
+              var safeguard = api.notes().filter(function(note){
+                return note.kind === 'action' && api.links().some(function(link){ return link.type === 'child' && link.from === failure.id && link.to === note.id; });
+              })[0];
+              if (!safeguard) throw new Error('Safeguard missing');
+              api.setContent(safeguard.id, 'Prevent: Freeze scope\\nDetect early: Check use daily\\nRespond if it happens: Remove unused scope');
+              var ready = api.inversionContext(inversionRoot.id);
+              var siblingFailure = api.createSiblingNote(failure.id);
+              var duplicateResult = api.runInversion(option.id);
+              var inversionRoots = api.notes().filter(function(note){ return note.analysis && note.analysis.tool === 'inversion' && note.analysis.ownerId === option.id; });
+              api.commitDecision(root.id, option.id, 'Inversion exposed a preventable scope risk');
+              var history = api.decisionHistory(root.id);
+              var snapshotInversion = history.commits[0].notes.filter(function(note){ return note.id === inversionRoot.id; })[0];
+              var exported = api.exportData();
+              var exportedInversion = exported.notes.filter(function(note){ return note.id === inversionRoot.id; })[0];
+              window.KyanbasuWorkbenches.capture();
+              var workbenches = window.KyanbasuWorkbenches.exportData();
+              var workbenchInversion = workbenches.workbenches[0].notes.notes.filter(function(note){ return note.id === inversionRoot.id; })[0];
+              api.importData(exported);
+              setTimeout(function(){
+                var importedInversion = api.notes().filter(function(note){ return note.id === inversionRoot.id; })[0];
+                var importedContext = api.inversionContext(inversionRoot.id);
+                var analysisCard = document.querySelector('.tcNoteNode[data-note-id="'+inversionRoot.id+'"]');
+                var out = {
+                  runControl:true,
+                  initial:{
+                    opposite:initial.oppositeRecorded,
+                    failures:initial.failureCount,
+                    missingSignals:initial.missingSignals,
+                    unprotected:initial.unprotected,
+                    complete:initial.complete
+                  },
+                  rootKind:inversionRoot.kind,
+                  rootAnalysis:inversionRoot.analysis,
+                  desiredOutcomeIncluded:inversionRoot.content.indexOf('Deliver a useful release') >= 0,
+                  failureKind:failure.kind,
+                  safeguardKind:safeguard.kind,
+                  ready:ready,
+                  siblingKind:siblingFailure.kind,
+                  siblingTemplate:siblingFailure.content.indexOf('Failure mode:') === 0,
+                  duplicateExisting:duplicateResult && duplicateResult.existing,
+                  inversionRootCount:inversionRoots.length,
+                  snapshotAnalysis:snapshotInversion && snapshotInversion.analysis,
+                  exportedVersion:exported.version,
+                  exportedAnalysis:exportedInversion && exportedInversion.analysis,
+                  workbenchAnalysis:workbenchInversion && workbenchInversion.analysis,
+                  importedAnalysis:importedInversion && importedInversion.analysis,
+                  importedFailures:importedContext.failureCount,
+                  analysisBadge:analysisCard && (analysisCard.querySelector('.tcNoteAnalysisBadge') || {}).textContent,
+                  commits:history.commits.length,
+                  commands:(window.STAGED_CMDS || []).slice()
+                };
+                var pre = document.createElement('pre');
+                pre.id = 'e2e-out';
+                pre.textContent = JSON.stringify(out);
+                document.body.appendChild(pre);
+              }, 180);
+            }, 180);
+          }, 180);
+        }, 180);
+      }, 180);
+    }catch(e){
+      var pre2 = document.createElement('pre');
+      pre2.id = 'e2e-out';
+      pre2.textContent = 'ERR:' + (e && e.message ? e.message : String(e));
+      document.body.appendChild(pre2);
+    }
+  }, 800);
+});
+</script>
+"""
+        html = html.replace("</body>", harness + "\n</body>")
+        raw = self._run_html_harness(html)
+        self.assertNotIn("ERR:", raw)
+        result = json.loads(raw)
+        self.assertTrue(result["runControl"], msg=json.dumps(result))
+        self.assertEqual(result["initial"], {"opposite": False, "failures": 1, "missingSignals": 1, "unprotected": 1, "complete": False}, msg=json.dumps(result))
+        self.assertEqual(result["rootKind"], "question", msg=json.dumps(result))
+        self.assertEqual(result["rootAnalysis"]["tool"], "inversion", msg=json.dumps(result))
+        self.assertEqual(result["rootAnalysis"]["role"], "root", msg=json.dumps(result))
+        self.assertTrue(result["desiredOutcomeIncluded"], msg=json.dumps(result))
+        self.assertEqual(result["failureKind"], "factor", msg=json.dumps(result))
+        self.assertEqual(result["safeguardKind"], "action", msg=json.dumps(result))
+        self.assertTrue(result["ready"]["complete"], msg=json.dumps(result))
+        self.assertEqual(result["ready"]["missingSignals"], 0, msg=json.dumps(result))
+        self.assertEqual(result["ready"]["unprotected"], 0, msg=json.dumps(result))
+        self.assertEqual(result["siblingKind"], "factor", msg=json.dumps(result))
+        self.assertTrue(result["siblingTemplate"], msg=json.dumps(result))
+        self.assertTrue(result["duplicateExisting"], msg=json.dumps(result))
+        self.assertEqual(result["inversionRootCount"], 1, msg=json.dumps(result))
+        self.assertEqual(result["snapshotAnalysis"]["tool"], "inversion", msg=json.dumps(result))
+        self.assertEqual(result["exportedVersion"], 7, msg=json.dumps(result))
+        self.assertEqual(result["exportedAnalysis"]["tool"], "inversion", msg=json.dumps(result))
+        self.assertEqual(result["workbenchAnalysis"]["tool"], "inversion", msg=json.dumps(result))
+        self.assertEqual(result["importedAnalysis"]["tool"], "inversion", msg=json.dumps(result))
+        self.assertEqual(result["importedFailures"], 2, msg=json.dumps(result))
+        self.assertEqual(result["analysisBadge"], "Inversion", msg=json.dumps(result))
+        self.assertEqual(result["commits"], 1, msg=json.dumps(result))
+        self.assertEqual(result["commands"], [], msg=json.dumps(result))
+
+    def test_canvas_consequence_analysis_branches_three_orders_and_round_trips(self):
+        base_html = Path("kyanbasu/templates/kyanbasu.base.html").read_text(encoding="utf-8")
+        payload = json.dumps({"tasks": [], "graph": {"edges": [], "parent_current_deps": {}, "child_to_parents": {}}})
+        html = build_runtime_html(base_html, payload, 0, lambda *_: None)
+
+        harness = """
+<script id="E2E_CANVAS_CONSEQUENCES_HARNESS">
+window.addEventListener('error', function(ev){
+  if (document.getElementById('e2e-out')) return;
+  var pre = document.createElement('pre');
+  pre.id = 'e2e-out';
+  pre.textContent = 'ERR:' + (ev && ev.message ? ev.message : 'Unhandled browser error');
+  document.body.appendChild(pre);
+});
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    try{
+      var api = window.KyanbasuNotes;
+      var created = api.createDecisionMap(180, 300, 'Decisions');
+      var root = created.root;
+      var option = created.options[0];
+      api.setContent(option.id, 'Option: Launch a small weekly planning practice');
+      api.selectNote(option.id);
+      setTimeout(function(){
+        var runButton = document.getElementById('inspectorConsequenceRun');
+        if (!runButton) throw new Error('Explore consequences control missing');
+        runButton.click();
+        setTimeout(function(){
+          var first = api.notes().filter(function(note){ return note.analysis && note.analysis.tool === 'consequences' && note.analysis.order === 1; })[0];
+          if (!first) throw new Error('First-order consequence missing');
+          var parallelControl = document.getElementById('inspectorConsequenceAddParallel');
+          var nextControl = document.getElementById('inspectorConsequenceAddNext');
+          api.setContent(first.id, '1st-order consequence: Weekly priorities become explicit\\nTime horizon: One week\\nLikelihood: 70%\\nPayoff / cost: Less drift\\nValue affected: Focus');
+          var firstParallel = api.createParallelConsequence(first.id);
+          var second = api.createNextConsequence(first.id);
+          var secondParallel = api.createParallelConsequence(second.id);
+          var third = api.createNextConsequence(second.id);
+          var thirdParallel = api.createParallelConsequence(third.id);
+          var context = api.consequenceContext(option.id);
+          var thirdContext = api.consequenceContext(third.id);
+          var duplicate = api.runConsequences(option.id);
+          var afterDuplicate = api.consequenceContext(option.id);
+          api.commitDecision(root.id, option.id, 'The delayed effects remain acceptable');
+          var history = api.decisionHistory(root.id);
+          var snapshotThird = history.commits[0].notes.filter(function(note){ return note.id === third.id; })[0];
+          var exported = api.exportData();
+          var exportedSecond = exported.notes.filter(function(note){ return note.id === second.id; })[0];
+          window.KyanbasuWorkbenches.capture();
+          var workbenches = window.KyanbasuWorkbenches.exportData();
+          var workbenchThird = workbenches.workbenches[0].notes.notes.filter(function(note){ return note.id === third.id; })[0];
+          api.importData(exported);
+          setTimeout(function(){
+            var imported = api.consequenceContext(option.id);
+            var importedFirst = api.notes().filter(function(note){ return note.id === first.id; })[0];
+            var analysisCard = document.querySelector('.tcNoteNode[data-note-id="'+first.id+'"]');
+            var out = {
+              runControl:true,
+              branchControls:[!!parallelControl, !!nextControl],
+              kinds:[first.kind, firstParallel.kind, second.kind, secondParallel.kind, third.kind, thirdParallel.kind],
+              orders:[first.analysis.order, firstParallel.analysis.order, second.analysis.order, secondParallel.analysis.order, third.analysis.order, thirdParallel.analysis.order],
+              sharedOwner:[first, firstParallel, second, secondParallel, third, thirdParallel].every(function(note){ return note.analysis.ownerId === option.id; }),
+              sharedRun:[first, firstParallel, second, secondParallel, third, thirdParallel].every(function(note){ return note.analysis.runId === first.analysis.runId; }),
+              templates:[firstParallel.content.indexOf('1st-order consequence:') === 0, second.content.indexOf('2nd-order consequence:') === 0, third.content.indexOf('3rd-order consequence:') === 0],
+              counts:context.counts,
+              earlyStops:context.earlyStops,
+              complete:context.complete,
+              thirdCanAddNext:thirdContext.canAddNext,
+              duplicateExisting:duplicate && duplicate.existing,
+              countAfterDuplicate:afterDuplicate.total,
+              snapshotAnalysis:snapshotThird && snapshotThird.analysis,
+              exportedVersion:exported.version,
+              exportedAnalysis:exportedSecond && exportedSecond.analysis,
+              workbenchAnalysis:workbenchThird && workbenchThird.analysis,
+              importedAnalysis:importedFirst && importedFirst.analysis,
+              importedCounts:imported.counts,
+              importedEarlyStops:imported.earlyStops,
+              analysisBadge:analysisCard && (analysisCard.querySelector('.tcNoteAnalysisBadge') || {}).textContent,
+              commands:(window.STAGED_CMDS || []).slice()
+            };
+            var pre = document.createElement('pre');
+            pre.id = 'e2e-out';
+            pre.textContent = JSON.stringify(out);
+            document.body.appendChild(pre);
+          }, 180);
+        }, 180);
+      }, 180);
+    }catch(e){
+      var pre2 = document.createElement('pre');
+      pre2.id = 'e2e-out';
+      pre2.textContent = 'ERR:' + (e && e.message ? e.message : String(e));
+      document.body.appendChild(pre2);
+    }
+  }, 800);
+});
+</script>
+"""
+        html = html.replace("</body>", harness + "\n</body>")
+        raw = self._run_html_harness(html)
+        self.assertNotIn("ERR:", raw)
+        result = json.loads(raw)
+        self.assertTrue(result["runControl"], msg=json.dumps(result))
+        self.assertEqual(result["branchControls"], [True, True], msg=json.dumps(result))
+        self.assertEqual(result["kinds"], ["outcome"] * 6, msg=json.dumps(result))
+        self.assertEqual(result["orders"], [1, 1, 2, 2, 3, 3], msg=json.dumps(result))
+        self.assertTrue(result["sharedOwner"], msg=json.dumps(result))
+        self.assertTrue(result["sharedRun"], msg=json.dumps(result))
+        self.assertEqual(result["templates"], [True, True, True], msg=json.dumps(result))
+        self.assertEqual(result["counts"], {"1": 2, "2": 2, "3": 2}, msg=json.dumps(result))
+        self.assertEqual(result["earlyStops"], 2, msg=json.dumps(result))
+        self.assertFalse(result["complete"], msg=json.dumps(result))
+        self.assertFalse(result["thirdCanAddNext"], msg=json.dumps(result))
+        self.assertTrue(result["duplicateExisting"], msg=json.dumps(result))
+        self.assertEqual(result["countAfterDuplicate"], 6, msg=json.dumps(result))
+        self.assertEqual(result["snapshotAnalysis"]["order"], 3, msg=json.dumps(result))
+        self.assertEqual(result["exportedVersion"], 7, msg=json.dumps(result))
+        self.assertEqual(result["exportedAnalysis"]["order"], 2, msg=json.dumps(result))
+        self.assertEqual(result["workbenchAnalysis"]["order"], 3, msg=json.dumps(result))
+        self.assertEqual(result["importedAnalysis"]["order"], 1, msg=json.dumps(result))
+        self.assertEqual(result["importedCounts"], {"1": 2, "2": 2, "3": 2}, msg=json.dumps(result))
+        self.assertEqual(result["importedEarlyStops"], 2, msg=json.dumps(result))
+        self.assertEqual(result["analysisBadge"], "1st order", msg=json.dumps(result))
+        self.assertEqual(result["commands"], [], msg=json.dumps(result))
 
     def test_canvas_notes_selects_and_unlinks_canvas_link(self):
         base_html = Path("kyanbasu/templates/kyanbasu.base.html").read_text(encoding="utf-8")
@@ -1345,7 +1725,7 @@ window.addEventListener('load', function(){
         self.assertEqual(result["pathTitle"], "Challenges")
         self.assertEqual(result["animationName"], "none")
         self.assertEqual(result["toolbarType"], "Challenges")
-        self.assertEqual(result["exportedVersion"], 5)
+        self.assertEqual(result["exportedVersion"], 7)
         self.assertEqual(result["exportedType"], "challenges")
         self.assertEqual(result["relationLabel"], "Challenges")
         self.assertEqual(result["inverseLabel"], "Challenged by")
@@ -1478,7 +1858,7 @@ window.addEventListener('load', function(){
         self.assertEqual(result["initial"]["icon"], "?", msg=json.dumps(result))
         self.assertIn("evidence current", result["initial"]["label"], msg=json.dumps(result))
         self.assertEqual(result["selectedKind"], "link", msg=json.dumps(result))
-        self.assertEqual(result["exportedVersion"], 5, msg=json.dumps(result))
+        self.assertEqual(result["exportedVersion"], 7, msg=json.dumps(result))
         self.assertEqual(result["exportedAnnotation"], {"kind": "condition", "text": "Only if validation passes"}, msg=json.dumps(result))
         self.assertEqual(result["importedKind"], "condition", msg=json.dumps(result))
         self.assertIn("validation passes", result["importedLabel"], msg=json.dumps(result))
@@ -1961,7 +2341,7 @@ window.addEventListener('load', function(){
         self.assertEqual(result["resultNotes"], 2)
         self.assertEqual(result["resultLinks"], 1)
         self.assertEqual(result["exportedKind"], "kyanbasu.notes")
-        self.assertEqual(result["exportedVersion"], 5)
+        self.assertEqual(result["exportedVersion"], 7)
         self.assertEqual(result["exportedNotes"], 2)
         self.assertEqual(result["exportedLinks"], 1)
         self.assertEqual(result["firstContent"], "Imported root\nLegacy body")
@@ -5553,7 +5933,7 @@ window.addEventListener('load', function(){
         self.assertGreater(result["marked"]["reviewedAt"], 0, msg=json.dumps(result))
         self.assertEqual(result["marked"]["updatedAt"], result["beforeUpdated"], msg=json.dumps(result))
         self.assertNotIn("never-recent", result["neverAfterMark"], msg=json.dumps(result))
-        self.assertEqual(result["exportedVersion"], 5, msg=json.dumps(result))
+        self.assertEqual(result["exportedVersion"], 7, msg=json.dumps(result))
         self.assertEqual(result["exportedMarked"]["reviewedAt"], result["marked"]["reviewedAt"], msg=json.dumps(result))
         self.assertIn("never-reviewed", result["lensIds"], msg=json.dumps(result))
         self.assertIn("stale-open", result["lensIds"], msg=json.dumps(result))

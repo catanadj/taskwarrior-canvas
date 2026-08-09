@@ -5,6 +5,18 @@ versioning from the `0.2.0` release onward.
 
 ## [Unreleased]
 
+### Added
+
+- Guided decision maps with factor, option, and outcome notes; contextual branch
+  creation; a decision review checklist; choice rationale; and immutable,
+  exportable commitment snapshots that preserve alternative branches.
+- An inversion analysis pass for decisions and options, including failure-mode
+  factors, early-warning review, safeguard actions, and completeness feedback.
+- A branching first-, second-, and third-order consequence pass for options,
+  with order-aware prompts, parallel outcomes, and incomplete-branch feedback.
+- A documented personal decision method based on target, states, acts,
+  uncertainty, precommitment, and outcome-independent review.
+
 ### Changed
 
 - The implementation now lives entirely in the `kyanbasu` Python package.
